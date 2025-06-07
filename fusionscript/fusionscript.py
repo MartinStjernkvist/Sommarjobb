@@ -3,7 +3,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from parameters import *
-from imports import *
+import math
 
 
 import traceback
@@ -29,50 +29,147 @@ def run(_context: str):
 '''
 
 def run(context):
+    ui = None
     try:
-        # Get the application and active design
         app = adsk.core.Application.get()
         ui = app.userInterface
-        design = adsk.fusion.Design.cast(app.activeProduct)
-        if not design:
-            ui.messageBox('No active Fusion 360 design found.', 'Error')
-            return
-
-        # Get the root component
+        design = app.activeProduct
         rootComp = design.rootComponent
-
-        # Create a new sketch on the XY plane
-        sketches = rootComp.sketches
-        xyPlane = rootComp.xYConstructionPlane
-        sketch = sketches.add(xyPlane)
-
-        # Parameters for the sinusoidal curve
-        amplitude = 1.0  # Amplitude in centimeters
-        frequency = 1.0  # Frequency (cycles per centimeter)
-        length = 10.0    # Length of the curve along x-axis in centimeters
-        numPoints = 100  # Number of points to define the spline
-
-        # Generate points for the sinusoidal curve
+        
+        # Get input from user
+        amplitude, cancelled = ui.inputBox('Enter amplitude (cm):', 'Sine Wave Parameters', '2.0')
+        if cancelled:
+            return
+        
+        frequency, cancelled = ui.inputBox('Enter frequency (cycles):', 'Sine Wave Parameters', '2.0')
+        if cancelled:
+            return
+            
+        length, cancelled = ui.inputBox('Enter length (cm):', 'Sine Wave Parameters', '10.0')
+        if cancelled:
+            return
+        
+        # Convert strings to numbers
+        try:
+            amplitude = float(amplitude)
+            frequency = float(frequency)
+            length = float(length)
+        except:
+            ui.messageBox('Invalid input. Please enter numeric values.')
+            return
+        
+        # Create or update sketch
+        sketch = None
+        sketchName = 'InteractiveSineWave'
+        
+        # Check if sketch already exists
+        for sk in rootComp.sketches:
+            if sk.name == sketchName:
+                sketch = sk
+                # Clear existing curves
+                sketch.sketchCurves.sketchFittedSplines.clear()
+                break
+        
+        # Create new sketch if it doesn't exist
+        if not sketch:
+            sketches = rootComp.sketches
+            xyPlane = rootComp.xYConstructionPlane
+            sketch = sketches.add(xyPlane)
+            sketch.name = sketchName
+        
+        # Generate points for the sine curve
+        resolution = 100
         points = adsk.core.ObjectCollection.create()
-        for i in range(numPoints + 1):
-            x = (i / numPoints) * length
-            y = amplitude * math.sin(frequency * 2 * math.pi * x)
-            z = 0.0
-            points.add(adsk.core.Point3D.create(x, y, z))
-
-        # Create a spline through the points
-        sketch.sketchCurves.sketchFittedSplines.add(points)
-
-        # Create an extrusion to form a surface
-        profile = sketch.profiles.item(0)  # Get the first profile
-        extrudes = rootComp.features.extrudeFeatures
-        extrudeInput = extrudes.createInput(profile, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
-        distance = adsk.core.ValueInput.createByReal(0.1)  # Thin surface (0.1 cm)
-        extrudeInput.setDistanceExtent(False, distance)
-        extrude = extrudes.add(extrudeInput)
-
-        ui.messageBox('Sinusoidal line and surface created successfully.')
-
+        
+        for i in range(resolution + 1):
+            x = (i / resolution) * length
+            y = amplitude * math.sin(2 * math.pi * frequency * x / length)
+            z = 0
+            
+            point = adsk.core.Point3D.create(x, y, z)
+            points.add(point)
+        
+        # Create spline through points
+        splines = sketch.sketchCurves.sketchFittedSplines
+        spline = splines.add(points)
+        
+        # Fit the view to show the entire curve
+        app.activeViewport.fit()
+        
+        ui.messageBox(f'Sine wave created with:\nAmplitude: {amplitude} cm\nFrequency: {frequency} cycles\nLength: {length} cm')
+        
     except:
         if ui:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+
+def createSurfaceFromSineWave():
+    """Create a surface by extruding or lofting the sine wave"""
+    ui = None
+    try:
+        app = adsk.core.Application.get()
+        ui = app.userInterface
+        design = app.activeProduct
+        rootComp = design.rootComponent
+        
+        # Find the sine wave sketch
+        sketch = None
+        for sk in rootComp.sketches:
+            if 'SineWave' in sk.name:
+                sketch = sk
+                break
+        
+        if not sketch:
+            ui.messageBox('Sine wave sketch not found. Please create one first.')
+            return
+        
+        # Create extrude feature
+        profiles = adsk.core.ObjectCollection.create()
+        
+        # For curves, we need to create a surface by extruding or using other surface tools
+        # Since splines can't be directly extruded, we'll create a loft or sweep
+        
+        # Get the spline curve
+        if sketch.sketchCurves.sketchFittedSplines.count > 0:
+            spline = sketch.sketchCurves.sketchFittedSplines.item(0)
+            
+            # Create a simple extrude by creating a second sketch
+            # Create another sketch parallel to the first
+            planes = rootComp.constructionPlanes
+            planeInput = planes.createInput()
+            
+            # Create a plane offset from XY plane
+            planeInput.setByOffset(rootComp.xYConstructionPlane, adsk.core.ValueInput.createByReal(2.0))
+            offsetPlane = planes.add(planeInput)
+            
+            # Create second sketch on offset plane
+            sketch2 = rootComp.sketches.add(offsetPlane)
+            
+            # Copy the sine curve to the new sketch (simplified approach)
+            points2 = adsk.core.ObjectCollection.create()
+            for i in range(101):
+                x = (i / 100.0) * 10.0  # Use same parameters as original
+                y = 2.0 * math.sin(2 * math.pi * 2.0 * x / 10.0)
+                z = 0
+                
+                point = adsk.core.Point3D.create(x, y, z)
+                points2.add(point)
+            
+            spline2 = sketch2.sketchCurves.sketchFittedSplines.add(points2)
+            
+            # Create loft between the two curves
+            lofts = rootComp.features.loftFeatures
+            loftInput = lofts.createInput(adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+            
+            # Add profiles (the curves)
+            loftSections = loftInput.loftSections
+            loftSections.add(spline)
+            loftSections.add(spline2)
+            
+            # Create the loft
+            loft = lofts.add(loftInput)
+            
+            ui.messageBox('Surface created from sine wave!')
+        
+    except:
+        if ui:
+            ui.messageBox('Failed to create surface:\n{}'.format(traceback.format_exc()))
